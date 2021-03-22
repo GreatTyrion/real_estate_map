@@ -251,7 +251,7 @@ if __name__ == "__main__":
 
     update_time = datetime.now().strftime("%m/%d/%Y")
     fg1 = folium.FeatureGroup(
-        name=f"Rental places from kijiji updated on {update_time}.")
+        name=f"Estate for sell from kijiji updated on {update_time}.")
     for i in range(len(houseLocation)):
         iframe = folium.IFrame(html=html % (
             titleList[i], priceList[i], houseInfo[i], houseDescription[i],
