@@ -5,14 +5,15 @@ import folium
 from folium.plugins import MarkerCluster
 import pandas as pd
 from queue import Queue
+import threading
 import time
 
 from get_kijiji_content import simple_get
 
 
 def get_content(num):
-    part_1 = "https://www.kijiji.ca/b-for-sale/st-johns/"
-    part_2 = "c30353001l1700113?ad=offering"
+    part_1 = "https://www.kijiji.ca/b-house-for-sale/st-johns/"
+    part_2 = "c35l1700113"
 
     if num == 1:
         url = part_1 + part_2
@@ -64,6 +65,14 @@ def get_info(html_):
 def clean_df(df):
     cleaned_df = df.drop_duplicates("address")
     return cleaned_df
+
+
+class WebScraper(threading.Thread):
+    def __init__(self, num):
+        super().__init__()
+        self.content = get_content(num)
+        self.num = num
+        self.size = 0
 
 
 def web_scraper(number, size=0):
@@ -131,7 +140,7 @@ def web_scraper(number, size=0):
 
         try:
             des_list = [string for string in item_soup.find(
-                "h3", {"class": "title-1536205785"}
+                "h3", {"class": "title-1621348837"}
             ).next_sibling.strings]
             des_list = [string.replace("\n", " ") for string in des_list]
             description = "".join(des_list)
@@ -163,7 +172,7 @@ if __name__ == "__main__":
     }
 
     begin_time = datetime.now()
-    for num in range(1, 50):
+    for num in range(1, 40):
         print(f"Working turtle {num} is about to scrape")
         web_scraper(num)
 
@@ -192,9 +201,7 @@ if __name__ == "__main__":
 
     print("Web scraping has been completed. Rental map will be generated.")
     df = pd.DataFrame(kijiji_dict)
-    df.to_csv("unclean_data.csv", sep='\t', encoding='utf-8')
     df = clean_df(df)
-    df.to_csv("clean_data.csv", sep='\t', encoding='utf-8')
 
     houseLocation = [
         (latitude, longitude) for latitude, longitude in zip(
