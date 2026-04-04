@@ -1,0 +1,18 @@
+[project]
+name = "real-estate-map"
+version = "0.1.0"
+description = "Scrape Kijiji St. John's housing listings and build a Folium map"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "beautifulsoup4>=4.13.0",
+    "folium>=0.20.0",
+    "geopy>=2.4.1",
+    "pandas>=2.2.0",
+    "requests>=2.32.0",
+]
+
+[project.optional-dependencies]
+reference = [
+    "loguru>=0.7.0",
+]

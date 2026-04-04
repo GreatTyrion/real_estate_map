@@ -1,40 +1,60 @@
-from requests import get
+import random
+import time
+
+import requests
 from requests.exceptions import RequestException
-from contextlib import closing
+
+_DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-CA,en-US;q=0.9,en;q=0.8",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
+}
+
+_session = requests.Session()
+_session.headers.update(_DEFAULT_HEADERS)
+
+REQUEST_TIMEOUT = 30
 
 
-def simple_get(url):
+def _is_html_response(resp):
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+    return ctype.find("html") > -1
+
+
+def simple_get(url, retries=3):
     """
-    Attempts to get the content at `url` by making an HTTP GET request.
-    If the content-type of response is some kind of HTML/XML, return the
-    text content, otherwise return None.
+    GET `url` and return response body bytes if the response looks like HTML
+    and status is OK. Returns None on failure after retries.
     """
-    try:
-        with closing(get(url, stream=True)) as resp:
-            if is_good_response(resp):
+    for attempt in range(retries):
+        try:
+            if attempt:
+                time.sleep(random.uniform(1.5, 4.0))
+            resp = _session.get(url, timeout=REQUEST_TIMEOUT)
+            if resp.status_code == 200 and _is_html_response(resp):
                 return resp.content
-            else:
+            if resp.status_code == 429:
+                time.sleep(random.uniform(8.0, 16.0))
+                continue
+            if resp.status_code in (403, 404):
+                print(f"HTTP {resp.status_code} for {url}")
                 return None
-
-    except RequestException as e:
-        log_error('Error during requests to {0} : {1}'.format(url, str(e)))
-        return None
-
-
-def is_good_response(resp):
-    """
-    Returns True if the response seems to be HTML, False otherwise.
-    """
-    content_type = resp.headers['Content-Type'].lower()
-    return (resp.status_code == 200
-            and content_type is not None
-            and content_type.find('html') > -1)
-
-
-def log_error(e):
-    """
-    It is always a good idea to log errors.
-    This function just prints them, but you can
-    make it do anything.
-    """
-    print(e)
+            print(f"HTTP {resp.status_code} for {url} (attempt {attempt + 1})")
+        except RequestException as e:
+            print(f"Request error for {url} (attempt {attempt + 1}): {e}")
+            if attempt < retries - 1:
+                time.sleep(random.uniform(2.0, 5.0))
+    return None

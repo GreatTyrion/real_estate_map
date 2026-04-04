@@ -1,166 +1,126 @@
-from bs4 import BeautifulSoup
-from datetime import datetime
-from geopy.geocoders import ArcGIS
-import folium
-from folium.plugins import MarkerCluster
-import pandas as pd
-from queue import Queue
-import threading
+import os
 import time
+from datetime import datetime
+from queue import Queue
+from typing import Any
+
+import folium
+import pandas as pd
+from folium.plugins import MarkerCluster
+from geopy.geocoders import ArcGIS
 
 from get_kijiji_content import simple_get
+from kijiji_jsonld import listing_urls_from_search, parse_listing_page
+
+PART_1 = "https://www.kijiji.ca/b-house-for-sale/st-johns/"
+PART_2 = (
+    "c35l1700113?address=St.%20John%27s%2C%20NL&ll=47.5556097%2C-52.7452511"
+    "&radius=50.0&view=list"
+)
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        print(f"Invalid integer for {name}={raw!r}; using default {default}")
+        return default
 
 
-def get_content(num):
-    part_1 = "https://www.kijiji.ca/b-house-for-sale/st-johns/"
-    part_2 = "c35l1700113"
+MAX_PAGES = _env_int("REAL_ESTATE_MAP_MAX_PAGES", 13)
+# 0 = no limit; use e.g. 3 for a quick smoke test
+MAX_LISTINGS_PER_PAGE = _env_int("REAL_ESTATE_MAP_MAX_LISTINGS_PER_PAGE", 0)
 
+
+def search_page_url(num: int) -> str:
     if num == 1:
-        url = part_1 + part_2
-    else:
-        url = part_1 + "page-" + str(num) + "/" + part_2
-    webpage_content = simple_get(url)
-    if webpage_content:
-        soup = BeautifulSoup(webpage_content, "html.parser")
-        rent_houses = soup.find_all("div", {"class": "search-item"})
-        return rent_houses
-    else:
+        return PART_1 + PART_2
+    return f"{PART_1}page-{num}/{PART_2}"
+
+
+def get_listing_urls(page_num: int) -> list[str]:
+    url = search_page_url(page_num)
+    body = simple_get(url)
+    if not body:
         return []
+    urls = listing_urls_from_search(body)
+    if MAX_LISTINGS_PER_PAGE > 0:
+        urls = urls[:MAX_LISTINGS_PER_PAGE]
+    return urls
 
 
-def get_info(html_):
-    info_list = []
-    attributes = html_.find_all(
-        "h3", {"class": "attributeCardTitle-4135421267"}
-    )
-    for attri in attributes:
-        label_1 = attri.next_sibling.find_all(
-            "h4", {"class": "realEstateLabel-3766429502"}
-        )
-        value_1 = [label.next_sibling.string for label in label_1]
-        info_list = info_list + [
-            label.string+": "+value for label, value in zip(label_1, value_1)
-        ]
-        label_2 = attri.next_sibling.find_all(
-            "h4", {"class": "attributeGroupTitle-2142319834"}
-        )
-        value_2 = attri.next_sibling.find_all(
-            "ul", {"class": "list-1757374920 disablePadding-1318173106"}
-        )
-        value_ = []
-        for ul in value_2:
-            values = [item.get("aria-label") for item in ul.find_all("svg")]
-            values = [item.split(": ")[1] for item in values if "Yes" in item]
-            if values:
-                pass
-            else:
-                values.append("N/A")
-            value_.append(", ".join(values))
-        info_list = info_list + [
-            label.string+": "+value for label, value in zip(label_2, value_)
-        ]
-    return info_list
-
-
-def clean_df(df):
-    cleaned_df = df.drop_duplicates("address")
-    return cleaned_df
-
-
-class WebScraper(threading.Thread):
-    def __init__(self, num):
-        super().__init__()
-        self.content = get_content(num)
-        self.num = num
-        self.size = 0
-
-
-def web_scraper(number, size=0):
-    content = get_content(number)
-    time.sleep(2)
-    for ad in content:
-        item_url = "https://www.kijiji.ca" + ad.a.get("href")
+def web_scraper(page_num: int, data_queue: Queue, delay_sec: float = 2.0) -> int:
+    urls = get_listing_urls(page_num)
+    if not urls:
+        print(f"No listing URLs on search page #{page_num}")
+        return 0
+    count = 0
+    time.sleep(delay_sec)
+    for item_url in urls:
         item_content = simple_get(item_url)
         if not item_content:
             continue
-        item_soup = BeautifulSoup(item_content, "html.parser")
-        try:
-            item_address = item_soup.find(
-                "span", {"class", "address-3617944557"}
-            ).string.replace("\n", "")
-        except Exception as e:
-            print(f"Address is not found: {item_url}")
+        parsed = parse_listing_page(item_content, item_url)
+        if not parsed:
+            print(f"Could not parse listing JSON-LD: {item_url}")
             continue
-
-        try:
-            latitude = float(item_soup.find(
-                "meta", {"property": "og:latitude"}
-            ).get("content"))
-            longitude = float(item_soup.find(
-                "meta", {"property": "og:longitude"}
-            ).get("content"))
-        except Exception as e:
-            latitude = None
-            longitude = None
-
-        try:
-            item_price = item_soup.find(
-                "span", {"class": "currentPrice-2842943473"}
-            ).string.replace("\n", "")
-        except Exception as e:
-            item_price = "Not available"
-            print(f"Price is not found: {item_url}")
-
-        try:
-            item_title = item_soup.find(
-                "h1", {"class", "title-2323565163"}
-            ).text.replace("\n", "")
-        except Exception as e:
-            item_title = "No title"
-            print(f"Title is not found: {item_url}")
-
-        try:
-            labels = item_soup.find_all(
-                "dt", {"class": "attributeLabel-240934283"}
-            )
-            values = item_soup.find_all(
-                "dd", {"class": "attributeValue-2574930263"}
-            )
-            info_list = [label.string + ": " + value.string for
-                         label, value in zip(labels, values)]
-            item_info = " *** ".join(info_list)
-
-            if item_info:
-                pass
-            else:
-                item_info = " *** ".join(get_info(item_soup))
-        except Exception as e:
-            item_info = "Not available"
-            print(f"Info is not found: {item_url}")
-
-        try:
-            des_list = [string for string in item_soup.find(
-                "h3", {"class": "title-1621348837"}
-            ).next_sibling.strings]
-            des_list = [string.replace("\n", " ") for string in des_list]
-            description = "".join(des_list)
-        except Exception as e:
-            description = "Not available"
-            print(f"Description is not found: {item_url}")
-
-        data = [item_title, item_url, item_address, latitude, longitude,
-                item_price, item_info, description]
-        data_queue.put(data)
-        size += 1
+        data_queue.put(
+            [
+                parsed["title"],
+                parsed["url"],
+                parsed["address"],
+                parsed["latitude"],
+                parsed["longitude"],
+                parsed["price"],
+                parsed["info"],
+                parsed["description"],
+            ]
+        )
+        count += 1
         print(f"Completed scraping from {item_url}")
-        time.sleep(2)
+        time.sleep(delay_sec)
+    print(f"Page #{page_num} scraped {count} ads")
+    return count
 
-    print(f"Thread #{number} scrapes {size} ads")
+
+def clean_df(df: pd.DataFrame) -> pd.DataFrame:
+    return df.drop_duplicates(subset=["address"])
+
+
+def geocode_missing_rows(kijiji_dict: dict, max_passes: int = 6) -> None:
+    geocoder = ArcGIS()
+    n = len(kijiji_dict["latitude"])
+    for _ in range(max_passes):
+        missing = [
+            i
+            for i in range(n)
+            if kijiji_dict["latitude"][i] is None or kijiji_dict["longitude"][i] is None
+        ]
+        if not missing:
+            break
+        improved = False
+        for i in missing:
+            addr = kijiji_dict["address"][i]
+            if not addr or addr == "Not available":
+                continue
+            try:
+                loc = geocoder.geocode(addr, timeout=15)
+                if loc:
+                    kijiji_dict["latitude"][i] = loc.latitude
+                    kijiji_dict["longitude"][i] = loc.longitude
+                    improved = True
+            except Exception:
+                pass
+            time.sleep(0.35)
+        if not improved:
+            break
 
 
 if __name__ == "__main__":
-    data_queue = Queue(maxsize=0)
-    kijiji_dict = {
+    data_queue: Queue = Queue(maxsize=0)
+    kijiji_dict: dict[str, list[Any]] = {
         "title": [],
         "url": [],
         "address": [],
@@ -168,13 +128,13 @@ if __name__ == "__main__":
         "longitude": [],
         "price": [],
         "info": [],
-        "description": []
+        "description": [],
     }
 
     begin_time = datetime.now()
-    for num in range(1, 30):
+    for num in range(1, MAX_PAGES + 1):
         print(f"Working turtle {num} is about to scrape")
-        web_scraper(num)
+        web_scraper(num, data_queue)
 
     scrape_time = datetime.now() - begin_time
     print(f"Total scrape time: {scrape_time}")
@@ -187,34 +147,29 @@ if __name__ == "__main__":
             kijiji_dict[key].append(data[index])
 
     print("Begin to check and geocode address...")
-    while None in kijiji_dict["latitude"]:
-        for index, value in enumerate(kijiji_dict["address"]):
-            if kijiji_dict["latitude"][index] is None:
-                try:
-                    geo_location = ArcGIS().geocode(value)
-                    kijiji_dict["latitude"][index] = geo_location.latitude
-                    kijiji_dict["longitude"][index] = geo_location.longitude
-                except Exception as e:
-                    pass
+    geocode_missing_rows(kijiji_dict)
     geocode_time = datetime.now() - begin_time
     print(f"Total geocode time: {geocode_time}")
 
-    print("Web scraping has been completed. Rental map will be generated.")
+    print("Web scraping has been completed. Housing map will be generated.")
     df = pd.DataFrame(kijiji_dict)
     df = clean_df(df)
 
-    houseLocation = [
-        (latitude, longitude) for latitude, longitude in zip(
-            list(df.latitude), list(df.longitude)
+    df_markers = df.dropna(subset=["latitude", "longitude"])
+    if df_markers.empty:
+        print(
+            "No rows with coordinates; writing index.html centered on St. John's "
+            "with no markers."
         )
-    ]
-    priceList = list(df.price)
-    hrefList = list(df.url)
-    houseInfo = list(df["info"])
-    titleList = list(df.title)
-    houseDescription = list(df.description)
 
-    html = """
+    houseLocation = list(zip(df_markers["latitude"], df_markers["longitude"]))
+    priceList = list(df_markers["price"])
+    hrefList = list(df_markers["url"])
+    houseInfo = list(df_markers["info"])
+    titleList = list(df_markers["title"])
+    houseDescription = list(df_markers["description"])
+
+    popup_html = """
     %s<br>
     ######################<br>
     Price: %s<br>
@@ -223,13 +178,13 @@ if __name__ == "__main__":
     %s<br>
     ######################<br>
     Description:<br>
-    %s<br> 
+    %s<br>
     ######################<br>
     <a href="%s" target="_blank">Link to Kijiji</a>
     """
 
-
     def color_selector(price):
+        # Folium.Icon has no "yellow"; beige is the closest built-in warm/light tone.
         try:
             price = float(price.replace("$", "").replace(",", ""))
             if price < 100000.0:
@@ -239,28 +194,45 @@ if __name__ == "__main__":
             if 200000.0 <= price < 300000.0:
                 return "purple"
             if 300000.0 <= price < 400000.0:
+                return "beige"
+            if 400000.0 <= price < 500000.0:
                 return "orange"
-            if price >= 400000.0:
+            if price >= 500000.0:
                 return "red"
-        except:
-            return "white"
+        except Exception:
+            pass
+        return "white"
 
-    map = folium.Map(location=[47.5669, -52.7067], zoom_start=13)
-
-    marker_cluster = MarkerCluster().add_to(map)
-
+    m = folium.Map(location=[47.5669, -52.7067], zoom_start=13)
+    marker_cluster = MarkerCluster().add_to(m)
     update_time = datetime.now().strftime("%m/%d/%Y")
     fg1 = folium.FeatureGroup(
-        name=f"Estate for sell from kijiji updated on {update_time}.")
-    for i in range(len(houseLocation)):
-        iframe = folium.IFrame(html=html % (
-            titleList[i], priceList[i], houseInfo[i], houseDescription[i],
-            hrefList[i]), width=300, height=400)
-        folium.Marker(location=houseLocation[i], popup=folium.Popup(iframe),
-                      icon=folium.Icon(color_selector(priceList[i]))).add_to(
-            marker_cluster)
+        name=f"Estate for sale from Kijiji updated on {update_time}."
+    )
+    def _escape_percent(s: Any) -> str:
+        # popup_html uses "%" formatting; literal "%" in listing text must be doubled.
+        return str(s).replace("%", "%%")
 
-    map.add_child(fg1)
-    map.add_child(folium.LayerControl())
-    map.save("index.html")
+    for i in range(len(houseLocation)):
+        iframe = folium.IFrame(
+            html=popup_html
+            % (
+                _escape_percent(titleList[i]),
+                _escape_percent(priceList[i]),
+                _escape_percent(houseInfo[i]),
+                _escape_percent(houseDescription[i]),
+                _escape_percent(hrefList[i]),
+            ),
+            width=300,
+            height=400,
+        )
+        folium.Marker(
+            location=houseLocation[i],
+            popup=folium.Popup(iframe),
+            icon=folium.Icon(color=color_selector(priceList[i])),
+        ).add_to(marker_cluster)
+
+    m.add_child(fg1)
+    m.add_child(folium.LayerControl())
+    m.save("index.html")
     print("Map has been generated!")

@@ -1,0 +1,6 @@
+# Prefer dependency locking with uv: `uv sync` (see pyproject.toml and uv.lock).
+beautifulsoup4>=4.13.0
+folium>=0.20.0
+geopy>=2.4.1
+pandas>=2.2.0
+requests>=2.32.0
