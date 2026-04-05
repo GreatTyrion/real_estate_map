@@ -466,9 +466,6 @@ requires-dist = [
 ]
 provides-extras = ["reference"]
 
-[package.metadata.requires-dev]
-dev = []
-
 [[package]]
 name = "requests"
 version = "2.33.1"

@@ -42,8 +42,8 @@ flowchart LR
 ```
 
 1. **Search pages** — For each page index `1 … MAX_PAGES`, build the St. John’s list URL, fetch HTML, and extract listing URLs from **`application/ld+json`** (`ItemList` / `itemListElement`). If that fails, fall back to `<a href>` links matching `/v-house-for-sale/` (and similar) with a numeric ad id.
-2. **Detail pages** — For each listing URL, fetch HTML and parse the primary listing object from JSON-LD (e.g. `SingleFamilyResidence` with `offers`). Fields include title, description, price, address, bedrooms/bathrooms/size summary, and coordinates when present under **`offers.availableAtOrFrom`**.
-3. **Coordinates** — Prefer JSON-LD; if lat/lon missing, **`geocode_missing_rows`** uses **ArcGIS** via `geopy` with a **bounded** number of passes so failed geocodes cannot loop forever.
+2. **Detail pages** — For each listing URL, fetch HTML and parse the primary listing object from JSON-LD (e.g. `SingleFamilyResidence` with `offers`). Fields include title, description, price, address, and bedrooms/bathrooms/size summary.
+3. **Coordinates** — Prefer JSON-LD **`geo`** when Kijiji provides it. By default, lat/lon under **`offers.availableAtOrFrom` are not used** (they are often a city/search-area pin, not the property). **`geocode_missing_rows`** then fills gaps with **ArcGIS** via `geopy`, in **bounded** passes. Opt in to offer-place coords with **`REAL_ESTATE_MAP_TRUST_KIJIJI_OFFER_COORDS=1`**.
 4. **Data assembly** — Rows are queued then drained into parallel lists keyed like a `DataFrame`; **`clean_df`** drops duplicate **`address`** strings (multiple listings at one address may collapse).
 5. **Map** — Rows with both coordinates are plotted; popup HTML uses **`%` formatting** with user text passed through **`%` escaping** so descriptions containing `%` do not crash the build. Marker colours follow price bands (including **`beige`** for the $300k–$400k band because Folium has no `yellow`).
 
@@ -63,6 +63,7 @@ Environment variables are read at import time in `web_turtle.py` via **`_env_int
 |----------|------|
 | `REAL_ESTATE_MAP_MAX_PAGES` | Number of search pages to scrape (code default if unset: **13** — verify in source if this doc drifts) |
 | `REAL_ESTATE_MAP_MAX_LISTINGS_PER_PAGE` | Cap URLs per search page; **0** means no cap (useful for smoke tests) |
+| `REAL_ESTATE_MAP_TRUST_KIJIJI_OFFER_COORDS` | If **1**, trust `offers.availableAtOrFrom` lat/lon; default **0** (geocode-oriented) |
 
 Politeness: a **delay** (default 2 seconds) sleeps between listing requests inside `web_scraper`.
 
@@ -77,12 +78,13 @@ Older code relied on **hashed CSS module class names** and **`div.search-item`**
 
 ## Outputs and artifacts
 
-- **`index.html`** — Generated in the project root by `web_turtle.py` (not committed by default unless you choose to).
+- **`kijiji_listings.csv`** — Full deduplicated table for analysis (path overridable via `REAL_ESTATE_MAP_CSV_PATH`; `*.csv` is gitignored by default).
+- **`kijiji_listings.geojson`** — `FeatureCollection` of Points for GIS tools; only rows with coordinates (path overridable via `REAL_ESTATE_MAP_GEOJSON_PATH`).
+- **`index.html`** — Folium map, written after CSV and GeoJSON.
 - **`.venv` / `uv.lock`** — Local environment and lockfile for reproducible installs.
 
 ## Suggested follow-ups (not implemented)
 
-- Export CSV alongside the map for analysis.
 - Deduplicate by **URL** as well as or instead of address.
 - Optional CLI flags instead of only environment variables.
 - Align `reference/scraper.py` pagination URL keys if that script is revived for production use.

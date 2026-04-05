@@ -103,17 +103,17 @@ def _price_from_offers(offers: Any) -> str:
         return _unescape_text(str(price))
 
 
-def _lat_lon_from_listing(obj: dict) -> tuple[float | None, float | None]:
-    offers = obj.get("offers")
-    if isinstance(offers, dict):
-        place = offers.get("availableAtOrFrom")
-        if isinstance(place, dict):
-            lat, lon = place.get("latitude"), place.get("longitude")
-            if lat is not None and lon is not None:
-                try:
-                    return float(lat), float(lon)
-                except (TypeError, ValueError):
-                    pass
+def _lat_lon_from_listing(
+    obj: dict, *, trust_offer_place_coords: bool = True
+) -> tuple[float | None, float | None]:
+    """Extract coordinates from JSON-LD.
+
+    Prefer top-level ``geo`` when present. Kijiji often puts additional lat/lon
+    under ``offers.availableAtOrFrom`` that reflect a **search-area or
+    city-level map pin** (e.g. centre of St. John’s), not the exact property.
+    When ``trust_offer_place_coords`` is False, those offer-place values are
+    skipped so the caller can geocode the listing address instead.
+    """
     geo = obj.get("geo")
     if isinstance(geo, dict):
         lat, lon = geo.get("latitude"), geo.get("longitude")
@@ -122,6 +122,17 @@ def _lat_lon_from_listing(obj: dict) -> tuple[float | None, float | None]:
                 return float(lat), float(lon)
             except (TypeError, ValueError):
                 pass
+    if trust_offer_place_coords:
+        offers = obj.get("offers")
+        if isinstance(offers, dict):
+            place = offers.get("availableAtOrFrom")
+            if isinstance(place, dict):
+                lat, lon = place.get("latitude"), place.get("longitude")
+                if lat is not None and lon is not None:
+                    try:
+                        return float(lat), float(lon)
+                    except (TypeError, ValueError):
+                        pass
     return None, None
 
 
@@ -183,7 +194,12 @@ def _pick_detail_listing_object(markup: bytes | str, page_url: str) -> dict | No
     return candidates[0] if candidates else None
 
 
-def parse_listing_page(markup: bytes | str, page_url: str) -> dict[str, Any] | None:
+def parse_listing_page(
+    markup: bytes | str,
+    page_url: str,
+    *,
+    trust_offer_place_coords: bool = False,
+) -> dict[str, Any] | None:
     obj = _pick_detail_listing_object(markup, page_url)
     if not obj:
         return None
@@ -193,7 +209,9 @@ def parse_listing_page(markup: bytes | str, page_url: str) -> dict[str, Any] | N
         description = _unescape_text(description)
     else:
         description = "Not available"
-    lat, lon = _lat_lon_from_listing(obj)
+    lat, lon = _lat_lon_from_listing(
+        obj, trust_offer_place_coords=trust_offer_place_coords
+    )
     canon = obj.get("url")
     if not isinstance(canon, str) or not canon.startswith("http"):
         canon = page_url

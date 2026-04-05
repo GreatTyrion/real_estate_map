@@ -1,4 +1,5 @@
 *.csv
+*.geojson
 .DS_Store
 __pycache__/
 playground/
